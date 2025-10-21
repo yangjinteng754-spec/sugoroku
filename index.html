@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>セキュリティすごろく（ランダムイベント）</title>
+<style>
+  body {
+    font-family: "Segoe UI", sans-serif;
+    background: #f4f6fa;
+    margin: 0;
+    padding: 0;
+  }
+
+  h1 {
+    text-align: center;
+    margin-top: 20px;
+  }
+
+  .container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 15px;
+  }
+
+  .board {
+    display: grid;
+    grid-template-columns: repeat(10, 60px);
+    gap: 8px;
+    margin-top: 15px;
+  }
+
+  .cell {
+    width: 60px;
+    height: 60px;
+    border-radius: 10px;
+    background-color: #ffffff;
+    border: 1px solid #ccc;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-weight: bold;
+    position: relative;
+    transition: background-color 0.2s;
+  }
+
+  /* イベント色 */
+  .cell.event-red { background-color: #f8d7da; }
+  .cell.event-green { background-color: #d4efdf; }
+  .cell.event-orange { background-color: #fae5d3; }
+  .cell.event-blue { background-color: #d6eaf8; }
+  .cell.event-purple { background-color: #e8daef; }
+  .cell.event-gray { background-color: #e5e8e8; }
+
+  .player {
+    position: absolute;
+    bottom: 5px;
+    right: 5px;
+    background: #007bff;
+    color: white;
+    font-size: 11px;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    text-align: center;
+    line-height: 20px;
+  }
+
+  .player.p2 { background: #28a745; } /* プレイヤー2の色 */
+
+  .controls {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 10px;
+  }
+
+  input[type="text"] {
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    font-size: 14px;
+  }
+
+  button {
+    background: #007bff;
+    border: none;
+    color: white;
+    border-radius: 8px;
+    padding: 8px 16px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+
+  button:hover {
+    background: #0056b3;
+  }
+
+  .log {
+    margin-top: 10px;
+    width: 90%;
+    max-width: 700px;
+    background: #fff;
+    border-radius: 10px;
+    padding: 10px;
+    box-shadow: 0 0 5px rgba(0,0,0,0.1);
+    max-height: 250px;
+    overflow-y: auto;
+  }
+
+  .log-entry {
+    border-bottom: 1px solid #eee;
+    padding: 4px 0;
+  }
+
+  @media (max-width: 600px) {
+    .board {
+      grid-template-columns: repeat(5, 50px);
+    }
+  }
+</style>
+</head>
+<body>
+
+<h1>🔐 セキュリティすごろく（ランダムイベント）</h1>
+
+<div class="container">
+  <div class="controls">
+    <input type="text" id="player1" placeholder="プレイヤー1">
+    <input type="text" id="player2" placeholder="プレイヤー2">
+    <button id="startBtn">スタート</button>
+    <button id="resetBtn">リセット</button>
+  </div>
+
+  <div id="turnText">👉 プレイヤー1の番です</div>
+
+  <div class="board" id="board"></div>
+
+  <button id="rollBtn">🎲 サイコロを振る</button>
+
+  <div class="log" id="log">
+    <strong>📜 イベント一覧（ランダム）</strong><br>
+  </div>
+</div>
+
+<script>
+  const board = document.getElementById("board");
+  const log = document.getElementById("log");
+  const rollBtn = document.getElementById("rollBtn");
+  const startBtn = document.getElementById("startBtn");
+  const resetBtn = document.getElementById("resetBtn");
+  const turnText = document.getElementById("turnText");
+  const player1Input = document.getElementById("player1");
+  const player2Input = document.getElementById("player2");
+
+  const cells = 30;
+  let playerPositions = [0, 0];
+  let turn = 0;
+  let gameStarted = false;
+  let events = {};
+  // 表示に使うプレイヤー名（入力がない場合は既定値）
+  let playerNames = ["プレイヤー1", "プレイヤー2"];
+  // 各プレイヤーの「休み」カウンタ（nターン休みがあれば n > 0）
+  let skipTurns = [0, 0];
+
+  const eventTemplates = [
+    ["⚠️ メールを開いた！1マス戻る", -1, false, false, "event-red"],
+    ["🔐 強いパスワード！1マス進む", +1, false, false, "event-green"],
+    ["📵 SNSに住所公開！次のターン休み", 0, true, false, "event-orange"],
+    ["🎲 安全アプリ！もう一度サイコロ", 0, false, true, "event-blue"],
+    ["💻 不正サイトにアクセス！2マス戻る", -2, false, false, "event-red"],
+    ["🧩 セキュリティ質問忘れた！1ターン休み", 0, true, false, "event-purple"],
+    ["🕵️ パスワード漏洩！1マス戻る+次ターン休み", -1, true, false, "event-gray"],
+    ["⚡ ウイルス感染！次ターン休み&サイコロ半分", 0, true, false, "event-gray"]
+  ];
+
+  function shuffle(array) {
+    return array.sort(() => Math.random() - 0.5);
+  }
+
+  function generateRandomEvents() {
+    const availablePositions = Array.from({ length: cells - 2 }, (_, i) => i + 1); // exclude 0, last
+    const selected = shuffle(availablePositions).slice(0, 13);
+    events = {};
+    selected.forEach(pos => {
+      const ev = eventTemplates[Math.floor(Math.random() * eventTemplates.length)];
+      events[pos] = ev;
+    });
+  }
+
+  function createBoard() {
+    board.innerHTML = "";
+    for (let i = 0; i < cells; i++) {
+      const div = document.createElement("div");
+      div.classList.add("cell");
+      div.textContent = i;
+      if (events[i]) div.classList.add(events[i][4]);
+      board.appendChild(div);
+    }
+  }
+
+  function renderPlayers() {
+    // 既存のplayer要素を消す
+    document.querySelectorAll(".player").forEach(el => el.remove());
+    playerPositions.forEach((pos, i) => {
+      // 範囲保護
+      const safePos = Math.max(0, Math.min(cells - 1, pos));
+      const playerEl = document.createElement("div");
+      playerEl.className = "player";
+      if (i === 1) playerEl.classList.add("p2"); // プレイヤー2の色を変える
+      // 表示ラベルは名前の先頭2文字（長い名前のときでも省略）
+      const label = playerNames[i] ? playerNames[i].slice(0, 2) : String(i + 1);
+      playerEl.textContent = label;
+      // フルネームをtitle属性に入れる（ホバーで確認できる）
+      playerEl.title = playerNames[i];
+      // boardの子要素が存在するか確認
+      if (board.children[safePos]) board.children[safePos].appendChild(playerEl);
+    });
+  }
+
+  function addLog(text) {
+    const entry = document.createElement("div");
+    entry.classList.add("log-entry");
+    entry.textContent = text;
+    // 最新を上に表示（2番目に挿入すると見出しを残せる）
+    log.insertBefore(entry, log.children[1]);
+  }
+
+  function startGame() {
+    // 入力された名前を反映（空欄は既定値を使う）
+    const p1 = player1Input.value.trim();
+    const p2 = player2Input.value.trim();
+    playerNames[0] = p1 || "プレイヤー1";
+    playerNames[1] = p2 || "プレイヤー2";
+
+    // 入力をロック（途中で変えたい場合はこの2行を削ってもOK）
+    player1Input.disabled = true;
+    player2Input.disabled = true;
+
+    generateRandomEvents();
+    playerPositions = [0, 0];
+    skipTurns = [0, 0]; // 休み状態を初期化
+    turn = 0;
+    gameStarted = true;
+    createBoard();
+    renderPlayers();
+    log.innerHTML = "<strong>📜 イベント一覧（ランダム）</strong><br>";
+    Object.keys(events).sort((a,b)=>a-b).forEach(pos=>{
+      addLog(`${pos}マス: ${events[pos][0]}`);
+    });
+    addLog("🎮 ゲーム開始！");
+    turnText.textContent = `👉 ${playerNames[0]}の番です`;
+    rollBtn.disabled = false;
+  }
+
+  function resetGame() {
+    // シンプルにリロード（必要なら状態を初期化する処理に書き換えられます）
+    location.reload();
+  }
+
+  function rollDice() {
+    if (!gameStarted) {
+      addLog("⚠️ 先に「スタート」を押してください。");
+      return;
+    }
+
+    const player = turn;
+    const name = playerNames[player] || `プレイヤー${player + 1}`;
+
+    // 休み判定：skipTurns が 1 以上ならその分のターンを消費して飛ばす
+    if (skipTurns[player] > 0) {
+      skipTurns[player] -= 1;
+      addLog(`${name}は休み！残り休みターン: ${skipTurns[player]}`);
+      // 次のプレイヤーにターンを移す
+      turn = (turn + 1) % 2;
+      turnText.textContent = `👉 ${playerNames[turn]}の番です`;
+      return;
+    }
+
+    const dice = Math.floor(Math.random() * 6) + 1;
+    addLog(`${name}の番 🎲 ${dice} が出た！`);
+
+    // サイコロの結果を適用
+    playerPositions[player] += dice;
+    if (playerPositions[player] >= cells - 1) {
+      playerPositions[player] = cells - 1;
+      renderPlayers();
+      addLog(`🏁 ${name}の勝ち！`);
+      rollBtn.disabled = true;
+      return;
+    }
+
+    // イベント判定
+    if (events[playerPositions[player]]) {
+      const [msg, move, skip, extra, color] = events[playerPositions[player]];
+      addLog(`${name}: ${msg}`);
+
+      // 移動効果（戻る/進む）
+      playerPositions[player] += move;
+      if (playerPositions[player] < 0) playerPositions[player] = 0;
+      if (playerPositions[player] >= cells - 1) {
+        playerPositions[player] = cells - 1;
+        renderPlayers();
+        addLog(`🏁 ${name}の勝ち！`);
+        rollBtn.disabled = true;
+        return;
+      }
+
+      // 休み効果（skip が true の場合、次のターンに休ませる）
+      if (skip) {
+        // ここでは「次のターン1回休み」をセット
+        skipTurns[player] += 1;
+        addLog(`${name}は次のターンを休みます（休みカウント: ${skipTurns[player]}）`);
+      }
+
+      renderPlayers();
+
+      // もう一度サイコロを振れる効果（extra）があればそのまま同じターン継続
+      if (extra) {
+        addLog(`${name}はもう一度サイコロを振れます！`);
+        return;
+      }
+    }
+
+    renderPlayers();
+
+    // ターン交代
+    turn = (turn + 1) % 2;
+    turnText.textContent = `👉 ${playerNames[turn]}の番です`;
+  }
+
+  // イベント登録
+  startBtn.addEventListener("click", startGame);
+  resetBtn.addEventListener("click", resetGame);
+  rollBtn.addEventListener("click", rollDice);
+
+  // 初期ボード生成（まだゲーム開始前）
+  createBoard();
+  // サイコロはスタート前に押しても意味がないので無効化しておく（start時に有効化）
+  rollBtn.disabled = true;
+</script>
+
+</body>
+</html>
